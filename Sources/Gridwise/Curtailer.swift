@@ -74,10 +74,11 @@ final class Curtailer: ObservableObject {
         kind == "GoodWe" ? GoodWeInverter(host: host, port: testPort ?? 8899) : SunSpecInverter(host: host, port: testPort ?? 502)
     }
 
-    static func identify(kind: String, host: String) async throws -> (Inverter, InverterState) {
+    /// `forPutBack`: skip the model checks, so a limit Gridwise set can always be put back.
+    static func identify(kind: String, host: String, forPutBack: Bool = false) async throws -> (Inverter, InverterState) {
         let d = make(kind: kind, host: host)
-        if let g = d as? GoodWeInverter { try await g.identify() }
-        if let s = d as? SunSpecInverter { try await s.identify() }
+        if let g = d as? GoodWeInverter { try await g.identify(anyModel: forPutBack) }
+        if let s = d as? SunSpecInverter { try await s.identify(anyModel: forPutBack) }
         return (d, try await d.read())
     }
 
@@ -90,7 +91,7 @@ final class Curtailer: ObservableObject {
         loop = Task {
             if c.writtenPct != nil {
                 do {
-                    let (d, s) = try await Self.identify(kind: c.kind, host: c.host)
+                    let (d, s) = try await Self.identify(kind: c.kind, host: c.host, forPutBack: true)
                     device = d
                     await putBack(reason: "Gridwise was not shut down properly last time", current: s)
                 } catch { note("could not reach the inverter to put its limit back: \(error.localizedDescription)") }
@@ -232,7 +233,7 @@ final class Curtailer: ObservableObject {
     private func putBack(reason: String, current: InverterState? = nil) async {
         guard var c = config, let w = c.writtenPct else { return }
         do {
-            if device == nil { device = try await Self.identify(kind: c.kind, host: c.host).0 }
+            if device == nil { device = try await Self.identify(kind: c.kind, host: c.host, forPutBack: true).0 }
             guard let d = device else { return }
             let now = try await (current != nil ? current! : d.read())
             if let l = now.limitPct, abs(l - Double(w)) >= 1 {

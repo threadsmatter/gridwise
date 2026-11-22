@@ -545,7 +545,7 @@ struct InverterTile: View {
             Button(store.scan == nil ? "Look for inverters" : "Look again") { Task { await store.runScan() } }.disabled(store.scanning)
             if store.scanning { ProgressView().controlSize(.small); Note("About 10 seconds…") }
         }
-        Note("The scan only asks devices who they are. macOS may ask to let Gridwise find devices on your local network.")
+        Note("For a solar-only inverter Amber can't curtail, next to a separate AC-coupled battery. Hybrid inverters are refused. The scan only asks devices who they are; macOS may ask to let Gridwise find devices on your local network.")
         if let b = store.battery {
             Note("Battery meter (AlphaESS): grid \(b.gridW > 0 ? "importing" : "exporting") \(Fmt.kw(abs(b.gridW))), battery \(b.socPct.map { String(format: "%.0f%%", $0) } ?? "–"), \(Fmt.time(b.at, store.region.timeZone))")
         }

@@ -59,9 +59,15 @@ This uses the private interface behind Amber's app, which Amber does not publish
 
 When Amber's feed-in price goes above zero, exporting costs you money. Gridwise can then lower your inverter's power limit just enough for the house and the battery, and put your own limit back when exports pay again.
 
+**Who it's for**
+
+Curtailment is for one setup: solar panels on their own solar-only inverter that Amber can't curtail, plus a separate battery with its own inverter connected on the AC side (AC-coupled), which SmartShift may run. Amber controls the battery; Gridwise only holds the solar inverter down. If Amber already curtails your solar inverter, let Amber do it.
+
+Gridwise refuses hybrid inverters, where solar and battery share one inverter (GoodWe ET, EH, BT, BH, ES, EM, BP, and SunSpec inverters that report a battery). Lowering a hybrid's limit would also cut the battery, and Amber or your installer manages those.
+
 **Supported inverters**
 
-- **GoodWe** grid-tied inverters (MS, DT, D-NS, XS) with the Wi-Fi or LAN stick on your home network. GW…K-MS models are tested. Other GoodWe models run as a trial: every change is read back, and Gridwise stops if the inverter doesn't keep it.
+- **GoodWe** solar-only inverters (MS, DT, D-NS, XS, SDT, MT) with the Wi-Fi or LAN stick on your home network. GW…K-MS models are tested; the others run as a trial: every change is read back, and Gridwise stops if the inverter doesn't keep it. GoodWe models Gridwise doesn't recognise are refused.
 - **SunSpec inverters** over Modbus TCP: Fronius, SMA, SolarEdge and others. Modbus TCP control must be switched on in the inverter's own settings (on a Fronius: Communication → Modbus → "Inverter control via Modbus"). These inverters undo the limit by themselves if Gridwise stops renewing it for 10 minutes. SunSpec support has been tested against a simulated inverter but not yet on a real one, so it runs as a trial.
 
 **How much it holds back**

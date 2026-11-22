@@ -195,13 +195,34 @@ final class GoodWeInverter: Inverter {
         return Array(r[5..<(5 + Int(count) * 2)])
     }
 
+    /// GoodWe's solar-only lines, the ones that use address 0x7F and the 40480 power limit.
+    static let solarOnly: Set<String> = ["MS", "DT", "NS", "DNS", "XS", "SDT", "MT", "SMT"]
+    /// Hybrid and battery lines (ET, EH, BT, BH, ES, EM, BP and their variants): solar and battery on one
+    /// inverter, often run by Amber's SmartShift. Gridwise never writes to these.
+    static func family(of model: String) -> (solarOnly: Bool, hybrid: Bool) {
+        let parts = model.uppercased().split(separator: "-").dropFirst().map(String.init)
+        if parts.contains(where: { solarOnly.contains($0) }) { return (true, false) }
+        let hybrid = parts.contains { $0.hasPrefix("E") || $0.hasPrefix("B") || $0.contains("BP") }
+        return (false, hybrid)
+    }
+    static let hybridNote = "Gridwise doesn't control GoodWe hybrid or battery inverters (ET, EH, BT, BH, ES, EM, BP): a power limit would also cut the battery, and Amber or your installer manages these."
+
     /// Model name (registers 30012-30016) and rated power from it ("GW10K-MS" is 10 kW).
-    func identify() async throws {
-        let d = try await Task.detached { try self.readRegisters(0x7531, 0x28) }.value
+    /// Refuses anything that isn't a known solar-only model, unless `anyModel` (only for putting a limit back).
+    func identify(anyModel: Bool = false) async throws {
+        let d: [UInt8]
+        do { d = try await Task.detached { try self.readRegisters(0x7531, 0x28) }.value }
+        catch InverterError.noAnswer(let why) where !anyModel {
+            throw InverterError.unsupported("This GoodWe didn't answer as a solar-only model (MS, DT, D-NS, XS) (\(why)). \(Self.hybridNote) If it is solar-only, check it's switched on and on the network.")
+        }
         let name = String(bytes: d[22..<32], encoding: .ascii)?.trimmingCharacters(in: .whitespacesAndNewlines.union(.controlCharacters)) ?? ""
         model = name.isEmpty ? "GoodWe" : name
         if let m = model.range(of: #"(\d+(?:\.\d+)?)K"#, options: .regularExpression),
            let kw = Double(model[m].dropLast()) { ratedW = kw * 1000 }
+        if anyModel { return }
+        let f = Self.family(of: name)
+        if f.hybrid { throw InverterError.unsupported("\(model) is a hybrid. \(Self.hybridNote)") }
+        if !f.solarOnly { throw InverterError.unsupported("Gridwise doesn't recognise this GoodWe model (\(name.isEmpty ? "no model name" : name)), so it won't change its settings. Solar-only models it knows: MS, DT, D-NS, XS, SDT, MT.") }
     }
 
     func read() async throws -> InverterState {
@@ -288,9 +309,14 @@ final class SunSpecInverter: Inverter {
     private static func scaled(_ v: Int, _ sf: Int) -> Double { Double(v) * pow(10, Double(sf)) }
 
     /// Finds the SunSpec map ("SunS" at 40000, 0 or 50000; unit 1 or 126), then the models Gridwise uses.
-    func identify() async throws {
+    /// SunSpec models that mean a battery is part of this inverter: 124 (storage), 713 (DER storage capacity),
+    /// 802-805 (battery). Gridwise refuses these unless `anyModel` (only for putting a limit back).
+    static let storageModels: Set<UInt16> = [124, 713, 802, 803, 804, 805]
+
+    func identify(anyModel: Bool = false) async throws {
         try await Task.detached {
             var found = false
+            var storage = false
             outer: for u in [UInt8(1), 126] {
                 for b in [UInt16(40000), 0, 50000] {
                     self.unit = u
@@ -315,12 +341,13 @@ final class SunSpecInverter: Inverter {
                 case 123:
                     self.controlsAt = at
                     self.limitSF = Self.sf(try self.readRegs(at + 23, 1)[0])
-                default: break
+                default: if Self.storageModels.contains(id) { storage = true }
                 }
                 at = at &+ 2 &+ len
             }
             guard self.inverterAt != nil else { throw InverterError.unsupported("This inverter's SunSpec map has no integer inverter model (101–103).") }
             guard self.controlsAt != nil else { throw InverterError.unsupported("This inverter does not offer SunSpec power limiting (model 123).") }
+            if storage && !anyModel { throw InverterError.unsupported("\(self.model) reports a battery (hybrid inverter). Gridwise doesn't control hybrids: a power limit would also cut the battery, and Amber or your installer manages these.") }
         }.value
     }
 
