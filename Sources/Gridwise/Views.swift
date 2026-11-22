@@ -585,8 +585,11 @@ struct CurtailSetupSheet: View {
                       "Trial: this model's power limit hasn't been tested with Gridwise yet. Every change is read back, and Gridwise stops and puts the limit back if the inverter doesn't keep it.",
                       systemImage: d.tested ? "checkmark.seal" : "flask")
                     .font(.callout).foregroundStyle(d.tested ? Tint.good : .orange).fixedSize(horizontal: false, vertical: true)
+                if let a = amberCurtails(d.model) {
+                    Label(a, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                }
                 if d.revertsByItself {
-                    Note("This inverter undoes the limit by itself if Gridwise stops renewing it for 10 minutes.")
+                    Note("This inverter undoes the limit by itself if Gridwise stops talking to it for 10 minutes.")
                 } else {
                     Note("This inverter keeps whatever limit it was last given. Gridwise puts yours back when exports pay again, when you stop it, when it quits and when the Mac sleeps. If the Mac loses power, it puts it back the next time Gridwise opens.")
                 }

@@ -2,16 +2,22 @@ import Foundation
 
 // Talking to inverters on the home network, for curtailment. Two families:
 //
-//   GoodWe       Modbus RTU framed over UDP port 8899 (the Wi-Fi/LAN stick), the protocol of the open-source
-//                `goodwe` Python library, byte for byte. Grid-tied models (MS, DT, D-NS, XS) use address 0x7F.
+//   GoodWe       Modbus RTU framed over UDP port 8899 (the Wi-Fi/LAN stick), framed byte for byte as the
+//                open-source `goodwe` Python library does it. Solar-only models (MS, DT, D-NS, XS) use address 0x7F.
 //                The power limit is register 40480, whole per cent of rated power: the same setting as
-//                "Power limit" in GoodWe's SolarGo app. Verified on a GW10K-MS (22 Oct 2026). On other models
-//                it is a trial: every write is read back and anything unexpected stops curtailment.
+//                "Power limit" in GoodWe's SolarGo app. 40480 is not in the goodwe library or any GoodWe document
+//                found; it was found and proven on a GW10K-MS (22 Oct 2026: SolarGo 50% to 60% moved 40480 50 to 60
+//                and output 5 to 6 kW). On other models it is a trial: 40480 must read a sensible 1-100 first,
+//                every write is read back, and anything unexpected stops curtailment.
 //
 //   SunSpec      Modbus TCP port 502, the open standard used by Fronius, SMA, SolarEdge and others. Model 123
 //                (immediate controls) sets WMaxLimPct with a revert time, so the inverter undoes the limit by
-//                itself if Gridwise stops renewing it. Needs Modbus TCP control switched on in the inverter's
+//                itself if Gridwise stops talking to it (Fronius restarts the timer on every Modbus message, so
+//                it fires once Gridwise goes quiet). Needs Modbus TCP control switched on in the inverter's
 //                own settings (Fronius: "Inverter control via Modbus"). Not yet tried on a real inverter.
+//                SMA: its SunSpec guide says writing settings repeatedly wears out the flash, and WMaxLimPct is
+//                one of the few registers exempt. So on SMA only WMaxLimPct is written each time; WMaxLim_Ena
+//                and RvrtTms are written once, only if they differ, and no self-revert is relied on.
 //
 // Nothing here is called unless the user has switched curtailment on for that inverter.
 
@@ -223,6 +229,9 @@ final class GoodWeInverter: Inverter {
         let f = Self.family(of: name)
         if f.hybrid { throw InverterError.unsupported("\(model) is a hybrid. \(Self.hybridNote)") }
         if !f.solarOnly { throw InverterError.unsupported("Gridwise doesn't recognise this GoodWe model (\(name.isEmpty ? "no model name" : name)), so it won't change its settings. Solar-only models it knows: MS, DT, D-NS, XS, SDT, MT.") }
+        let l = try await Task.detached { try self.readRegisters(Self.limitRegister, 1) }.value
+        let now = Int(UInt16(l[0]) << 8 | UInt16(l[1]))
+        if !(1...100).contains(now) { throw InverterError.unsupported("\(model) doesn't show a power limit Gridwise understands (register 40480 reads \(now)), so it won't change its settings.") }
     }
 
     func read() async throws -> InverterState {
@@ -251,6 +260,16 @@ final class GoodWeInverter: Inverter {
     }
 }
 
+/// Solar-only inverters Amber curtails itself (help.amber.com.au, "Solar curtailment to maximise feed-in
+/// earnings", updated 18 Nov 2026). Gridwise is for inverters Amber can't curtail; for these it suggests Amber.
+func amberCurtails(_ model: String) -> String? {
+    let m = model.uppercased()
+    for brand in ["FRONIUS", "SOLAREDGE", "SUNGROW", "REDBACK", "ENPHASE"] where m.contains(brand) {
+        return "Amber can curtail \(brand == "SOLAREDGE" ? "SolarEdge" : brand.capitalized) inverters itself. If yours is enrolled with Amber, let Amber do it, and don't run Gridwise's curtailment on the same inverter."
+    }
+    return nil
+}
+
 // MARK: - SunSpec over Modbus TCP
 
 final class SunSpecInverter: Inverter {
@@ -259,7 +278,8 @@ final class SunSpecInverter: Inverter {
     private(set) var model = "SunSpec inverter"
     private(set) var ratedW: Double = 0
     let tested = false
-    let revertsByItself = true
+    var revertsByItself: Bool { !isSMA }
+    var isSMA: Bool { model.uppercased().hasPrefix("SMA") }
     static let revertSeconds: UInt16 = 600          // the inverter drops the limit by itself after 10 minutes unrenewed
     private var unit: UInt8 = 1
     private var base: UInt16 = 40000
@@ -367,8 +387,15 @@ final class SunSpecInverter: Inverter {
         try await Task.detached {
             guard let ctl = self.controlsAt else { throw InverterError.unsupported("not identified") }
             let raw = UInt16(Double(pct) / pow(10, Double(self.limitSF)))
-            // limit, no window, revert time, no ramp, enabled
-            try self.writeRegs(ctl + 5, [raw, 0, Self.revertSeconds, 0, 1])
+            if self.isSMA {
+                try self.writeRegs(ctl + 5, [raw])                       // the one register SMA lets you write often
+                let c = try self.readRegs(ctl + 5, 5)
+                if c[2] != Self.revertSeconds { try? self.writeRegs(ctl + 7, [Self.revertSeconds]) }
+                if c[4] != 1 { try self.writeRegs(ctl + 9, [1]) }
+            } else {
+                // limit, no window, revert time, no ramp, enabled (Fronius needs Ena written again to apply a new value)
+                try self.writeRegs(ctl + 5, [raw, 0, Self.revertSeconds, 0, 1])
+            }
             let back = try self.readRegs(ctl + 5, 5)
             if back[0] != raw || back[4] != 1 { throw InverterError.mismatch("wrote \(pct)%, it reads \(Self.scaled(Int(back[0]), self.limitSF))%, enabled \(back[4])") }
         }.value
@@ -379,7 +406,7 @@ final class SunSpecInverter: Inverter {
             guard let ctl = self.controlsAt else { throw InverterError.unsupported("not identified") }
             if let p = original.limitPct {
                 let raw = UInt16(p / pow(10, Double(self.limitSF)))
-                try self.writeRegs(ctl + 5, [raw, 0, 0, 0, 1])
+                if self.isSMA { try self.writeRegs(ctl + 5, [raw]) } else { try self.writeRegs(ctl + 5, [raw, 0, 0, 0, 1]) }
             } else {
                 try self.writeRegs(ctl + 9, [0])                         // WMaxLim_Ena: disabled
             }

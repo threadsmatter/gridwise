@@ -62,7 +62,7 @@ struct CloudGuide: Identifiable {
                    youGet: "A separate API username and password.", freshness: "Often said to be 5 minutes.",
                    source: "Third-party documentation", confirmed: false),
         CloudGuide(brand: "Fronius (Solar.web)", access: .business,
-                   steps: "Fronius's Solar.web API is for business customers on a paid contract. Fronius inverters can be read and controlled on the home network instead: switch on Modbus TCP in the inverter's settings and use Gridwise's Curtailment tile.",
+                   steps: "Fronius's Solar.web API is for business customers on a paid contract. Amber curtails Fronius inverters itself once they are enrolled, so most owners don't need Gridwise's curtailment.",
                    youGet: "–", freshness: "–", source: "fronius.com/en/solarweb-query-api", confirmed: true),
         CloudGuide(brand: "SMA (Sunny Portal)", access: .business,
                    steps: "SMA's API is a business contract; owners can only approve access for a company. SMA inverters can be read and controlled on the home network with SunSpec Modbus switched on.",

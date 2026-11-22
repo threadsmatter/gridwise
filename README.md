@@ -68,7 +68,9 @@ Gridwise refuses hybrid inverters, where solar and battery share one inverter (G
 **Supported inverters**
 
 - **GoodWe** solar-only inverters (MS, DT, D-NS, XS, SDT, MT) with the Wi-Fi or LAN stick on your home network. GW…K-MS models are tested; the others run as a trial: every change is read back, and Gridwise stops if the inverter doesn't keep it. GoodWe models Gridwise doesn't recognise are refused.
-- **SunSpec inverters** over Modbus TCP: Fronius, SMA, SolarEdge and others. Modbus TCP control must be switched on in the inverter's own settings (on a Fronius: Communication → Modbus → "Inverter control via Modbus"). These inverters undo the limit by themselves if Gridwise stops renewing it for 10 minutes. SunSpec support has been tested against a simulated inverter but not yet on a real one, so it runs as a trial.
+- **SunSpec inverters** over Modbus TCP, such as SMA Sunny Boy and Sunny Tripower, and Fimer/ABB UNO-DM-PLUS-E. Modbus TCP must be switched on in the inverter's own settings (on an SMA, in the installation assistant). Most SunSpec inverters undo the limit by themselves if Gridwise stops talking to them for 10 minutes. SMA warns that writing settings repeatedly wears out the inverter's memory, so on SMA Gridwise changes only the power-limit percentage, which SMA allows to be written often, and doesn't rely on the inverter undoing it. SunSpec support has been tested against a simulated inverter but not yet on a real one, so it runs as a trial.
+
+Amber curtails Fronius, SolarEdge, Sungrow, Redback and Enphase solar inverters itself. If yours is one of those and enrolled with Amber, let Amber do it; Gridwise shows a warning if it finds one. Solis, Growatt, Zeversolar and Delta inverters have no local control Gridwise can use without extra hardware, and Huawei needs installer access, so these aren't supported.
 
 **How much it holds back**
 
@@ -116,7 +118,7 @@ Gridwise has no server of its own and collects nothing. It talks only to these s
 ## Planned
 
 - Reading more makers' clouds directly (Fox ESS and Growatt first), for systems without AlphaESS or SmartShift.
-- Confirming SunSpec curtailment on real Fronius and SMA inverters. Reports from owners are welcome.
+- Confirming SunSpec curtailment on real SMA and Fimer inverters. Reports from owners are welcome.
 
 ## Building from source
 
