@@ -1,0 +1,5 @@
+.build/
+Gridwise.app/
+*.zip
+.DS_Store
+.swiftpm/
