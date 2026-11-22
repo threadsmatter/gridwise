@@ -172,7 +172,7 @@ struct PricesNow: View {
         HStack(spacing: 14) {
             Tile(title: "Buy now") {
                 Text(Fmt.cents(buy?.perKwh)).font(.system(size: 34, weight: .medium, design: .rounded)).foregroundStyle(Tint.buy)
-                Note(([buy?.descriptor.map(Self.word), buy?.renewables.map { String(format: "%.0f%% renewable", $0) },
+                Note(([buy?.descriptor.map(Self.word), buy?.renewables.map { String(format: "%.0f%% renewable", min(100, $0)) },
                        buy?.spikeStatus == "spike" ? "price spike" : nil] as [String?]).compactMap { $0 }.joined(separator: " · "))
             }
             Tile(title: "Exporting now") {
@@ -476,34 +476,151 @@ struct WholesaleTile: View {
     }
 }
 
-// MARK: - Inverters
+// MARK: - Inverters and curtailment
 
 struct InverterTile: View {
     @EnvironmentObject var store: Store
     @ObservedObject private var amber = SmartShiftControl.shared
+    @ObservedObject private var cur = Curtailer.shared
+    @State private var setup: FoundDevice?
+    @State private var askLive = false
+    @State private var askStop = false
+
     var body: some View {
-        Tile(title: "Your inverter", info: "Looks for solar inverters and batteries on your home network and lists what answers. It only asks who is there and never changes a setting. Controlling an inverter from Gridwise is planned; for now, Amber's own solar curtailment (in Amber's app) is the way to stop exporting at negative prices.") {
+        Tile(title: "Curtailment", info: "While Amber charges you to export, Gridwise can hold your inverter's output down so the solar goes to the house and battery instead of the grid, then put the inverter's own limit back. It works with GoodWe inverters and with inverters that support SunSpec over Modbus (Fronius, SMA, SolarEdge and others). It starts in dry run, which shows what it would do without changing anything.") {
             if let on = amber.status?.amberCurtailmentOn {
-                Label(on ? "Amber's solar curtailment is on" : "Amber's solar curtailment is off", systemImage: on ? "checkmark.circle.fill" : "circle")
+                Label(on ? "Amber's own solar curtailment is on" : "Amber's own solar curtailment is off", systemImage: on ? "checkmark.circle.fill" : "circle")
                     .font(.callout).foregroundStyle(on ? Tint.good : .secondary)
             }
-            if let r = store.scan {
-                if let n = r.note { Problem(n) }
-                if r.devices.isEmpty && r.note == nil { Note("Nothing answered. Inverters on Wi-Fi often only talk to their maker's cloud.") }
-                ForEach(r.devices) { d in
-                    HStack {
-                        Text(d.kind).font(.callout.weight(.medium))
-                        Text(d.ip).monospacedDigit().foregroundStyle(.secondary)
-                        Spacer()
-                        Text(d.detail).font(.caption).foregroundStyle(.secondary)
+            if let c = cur.config { running(c) } else { finder }
+            if let e = cur.lastError { Problem(e) }
+        }
+        .sheet(item: $setup) { d in CurtailSetupSheet(device: d).environmentObject(store) }
+        .confirmationDialog("Let Gridwise change the inverter's limit for real?", isPresented: $askLive, titleVisibility: .visible) {
+            Button("Go live") { cur.setLive(true) }
+            Button("Stay in dry run", role: .cancel) {}
+        } message: { Text("While exports cost money, Gridwise will lower \(cur.config?.model ?? "the inverter")'s power limit, never above its own limit, and put it back afterwards. Don't do this if another program or app already controls this inverter.") }
+        .confirmationDialog("Stop curtailment and put the inverter's own limit back?", isPresented: $askStop, titleVisibility: .visible) {
+            Button("Stop and put back") { Task { await cur.stop() } }
+            Button("Keep going", role: .cancel) {}
+        }
+    }
+
+    @ViewBuilder private func running(_ c: CurtailConfig) -> some View {
+        HStack {
+            Text("\(c.model) · \(c.host)").font(.callout.weight(.medium))
+            Spacer()
+            Text(c.live ? "LIVE" : "DRY RUN").font(.caption.weight(.bold))
+                .padding(.horizontal, 6).padding(.vertical, 2)
+                .background(c.live ? Color.orange.opacity(0.25) : Color.secondary.opacity(0.2), in: Capsule())
+        }
+        Text(cur.status).font(.callout).fixedSize(horizontal: false, vertical: true)
+        if let s = cur.state {
+            Note("Inverter making \(Fmt.kw(s.outputW)) · limit now \(s.limitPct.map { "\(Int($0))%" } ?? "none") · its own limit \(c.originalPct.map { "\(Int($0))%" } ?? "none")")
+        }
+        Stepper("Without battery meter readings, hold at \(c.fixedPct)%", value: Binding(get: { c.fixedPct }, set: { cur.setFixed($0) }), in: Curtailer.minPct...100, step: 5)
+            .font(.callout)
+        HStack {
+            if c.live { Button("Back to dry run") { cur.setLive(false) } } else { Button("Go live…") { askLive = true }.buttonStyle(.borderedProminent) }
+            Button("Stop…", role: .destructive) { askStop = true }
+        }
+        if !cur.log.isEmpty { Note("Last: \(cur.log.last!)").help(cur.log.joined(separator: "\n")) }
+    }
+
+    @ViewBuilder private var finder: some View {
+        if let r = store.scan {
+            if let n = r.note { Problem(n) }
+            if r.devices.isEmpty && r.note == nil { Note("Nothing answered. Inverters on Wi-Fi only may talk only to their maker's cloud.") }
+            ForEach(r.devices) { d in
+                HStack {
+                    Text(d.kind).font(.callout.weight(.medium))
+                    Text(d.ip).monospacedDigit().foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Set up…") { setup = d }
+                }
+                Note(d.detail)
+            }
+        }
+        HStack {
+            Button(store.scan == nil ? "Look for inverters" : "Look again") { Task { await store.runScan() } }.disabled(store.scanning)
+            if store.scanning { ProgressView().controlSize(.small); Note("About 10 seconds…") }
+        }
+        Note("The scan only asks devices who they are. macOS may ask to let Gridwise find devices on your local network.")
+        if let b = store.battery {
+            Note("Battery meter (AlphaESS): grid \(b.gridW > 0 ? "importing" : "exporting") \(Fmt.kw(abs(b.gridW))), battery \(b.socPct.map { String(format: "%.0f%%", $0) } ?? "–"), \(Fmt.time(b.at, store.region.timeZone))")
+        }
+        if let e = store.errors["battery"] { Problem(e) }
+    }
+}
+
+struct CurtailSetupSheet: View {
+    let device: FoundDevice
+    @EnvironmentObject var store: Store
+    @Environment(\.dismiss) private var dismiss
+    @State private var found: (Inverter, InverterState)?
+    @State private var error: String?
+    @State private var rated: Double?
+    @State private var fixed = 30
+    @State private var agreed = false
+
+    private var kind: String { device.kind == "GoodWe" ? "GoodWe" : "SunSpec" }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Set up curtailment").font(.title3.weight(.semibold))
+            if let (d, s) = found {
+                Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 4) {
+                    GridRow { Text("Inverter"); Text("\(d.model) at \(d.host)") }
+                    GridRow { Text("Making now"); Text(Fmt.kw(s.outputW)) }
+                    GridRow { Text("Its own limit"); Text(s.limitPct.map { "\(Int($0))%" } ?? "none") }
+                    GridRow { Text("Rated power"); Text(d.ratedW > 0 ? Fmt.kw(d.ratedW) : "unknown") }
+                }
+                .font(.callout)
+                if d.ratedW <= 0 {
+                    LabeledContent("Rated power") {
+                        TextField("", value: $rated, format: .number, prompt: Text("kW")).frame(width: 80).textFieldStyle(.roundedBorder)
                     }
                 }
+                Label(d.tested ? "This model's power limit has been tested with Gridwise." :
+                      "Trial: this model's power limit hasn't been tested with Gridwise yet. Every change is read back, and Gridwise stops and puts the limit back if the inverter doesn't keep it.",
+                      systemImage: d.tested ? "checkmark.seal" : "flask")
+                    .font(.callout).foregroundStyle(d.tested ? Tint.good : .orange).fixedSize(horizontal: false, vertical: true)
+                if d.revertsByItself {
+                    Note("This inverter undoes the limit by itself if Gridwise stops renewing it for 10 minutes.")
+                } else {
+                    Note("This inverter keeps whatever limit it was last given. Gridwise puts yours back when exports pay again, when you stop it, when it quits and when the Mac sleeps. If the Mac loses power, it puts it back the next time Gridwise opens.")
+                }
+                Stepper("Without battery meter readings, hold at \(fixed)%", value: $fixed, in: Curtailer.minPct...100, step: 5).font(.callout)
+                Note("With SmartShift signed in or an AlphaESS key in Setup, Gridwise follows your battery's meter instead: just enough output for the house and battery.")
+                Toggle(isOn: $agreed) {
+                    Text("I understand Gridwise will change this inverter's power limit once I switch it from dry run to live, and that no other program or app should be controlling it at the same time.")
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .font(.callout)
+            } else if let error {
+                Problem(error)
+            } else {
+                HStack { ProgressView().controlSize(.small); Text("Reading the inverter…") }
             }
             HStack {
-                Button(store.scan == nil ? "Look for inverters" : "Look again") { Task { await store.runScan() } }.disabled(store.scanning)
-                if store.scanning { ProgressView().controlSize(.small); Note("About 10 seconds…") }
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Start in dry run") { begin() }.keyboardShortcut(.defaultAction)
+                    .disabled(found == nil || !agreed || ((found?.0.ratedW ?? 0) <= 0 && (rated ?? 0) <= 0))
             }
-            Note("macOS may ask to let Gridwise find devices on your local network.")
         }
+        .padding(20).frame(width: 480)
+        .task {
+            do { found = try await Curtailer.identify(kind: kind, host: device.ip) }
+            catch { self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription }
+        }
+    }
+
+    private func begin() {
+        guard let (d, s) = found else { return }
+        let c = CurtailConfig(host: d.host, kind: d.kind, model: d.model, ratedW: d.ratedW > 0 ? d.ratedW : (rated ?? 0) * 1000,
+                              live: false, fixedPct: fixed, originalPct: s.limitPct)
+        Curtailer.shared.start(c, device: d)
+        dismiss()
     }
 }

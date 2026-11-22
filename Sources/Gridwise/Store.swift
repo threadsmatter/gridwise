@@ -30,6 +30,7 @@ final class Store: ObservableObject {
     @Published var scan: (devices: [FoundDevice], note: String?)?
     @Published var scanning = false
     @Published var showSetup = false
+    @Published var battery: BatteryReading?               // from the battery maker's cloud (AlphaESS), when set up
 
     let smartShift = SmartShiftControl.shared
     private var tasks: [Task<Void, Never>] = []
@@ -52,6 +53,7 @@ final class Store: ObservableObject {
             loop(300) { await self.loadGrid() },
             loop(1800) { await self.loadWeather() },
             loop(60) { await self.smartShift.refresh() },
+            loop(30) { await self.loadBattery() },          // AlphaESS asks for 10 s or more between calls
         ]
     }
 
@@ -175,6 +177,11 @@ final class Store: ObservableObject {
         guard let la = setup.latitude, let lo = setup.longitude else { return }
         do { weather = try await WeatherService.forecast(latitude: la, longitude: lo, timeZone: region.timeZone); record("weather", nil) }
         catch { record("weather", error) }     // keeps the last forecast
+    }
+
+    func loadBattery() async {
+        guard let a = AlphaESS.saved(), let sn = setup.alphaSn else { battery = nil; return }
+        do { battery = try await a.lastPower(sn: sn); record("battery", nil) } catch { record("battery", error) }
     }
 
     func runScan() async {

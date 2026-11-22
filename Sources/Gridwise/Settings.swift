@@ -43,6 +43,7 @@ struct Setup: Codable, Equatable {
     var membershipPerMonth: Double = 25  // Amber's monthly membership fee
     var billDay: Int = 1                 // the day of the month each Amber billing month starts
     var region: String?                  // NEM region override; otherwise from the site's network
+    var alphaSn: String?                 // the AlphaESS system to read, when an AlphaESS key is saved
 
     static let key = "setup"
     static func load() -> Setup {

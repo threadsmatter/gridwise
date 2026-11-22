@@ -10,6 +10,12 @@ struct SetupSheet: View {
     @State private var places: [Place] = []
     @State private var searching = false
     @State private var draft = Setup()
+    @State private var alphaID = ""
+    @State private var alphaSecret = ""
+    @State private var alphaSystems: [(sn: String, model: String)] = []
+    @State private var alphaError: String?
+    @State private var alphaSaved = AlphaESS.saved() != nil
+    @State private var showGuide = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -56,6 +62,30 @@ struct SetupSheet: View {
                         ForEach(Region.allCases) { Text($0.name).tag($0.rawValue) }
                     }
                 }
+                Section("Battery meter from the cloud (optional)") {
+                    Text("Curtailment follows your house load best with live readings from your battery's meter. SmartShift gives them if you sign in. Batteries on AlphaESS's cloud (also Bytewatt and Neovolt) can give them every 10 seconds with a free key.")
+                        .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Button("How to get a key for your inverter or battery…") { showGuide = true }
+                    if alphaSaved {
+                        HStack {
+                            Label("AlphaESS key saved in your Keychain", systemImage: "key.fill").foregroundStyle(Tint.good)
+                            Spacer()
+                            Button("Remove", role: .destructive) { AlphaESS.forget(); alphaSaved = false; draft.alphaSn = nil; alphaSystems = [] }
+                        }
+                        if !alphaSystems.isEmpty {
+                            Picker("System", selection: Binding(get: { draft.alphaSn ?? "" }, set: { draft.alphaSn = $0.isEmpty ? nil : $0 })) {
+                                ForEach(alphaSystems, id: \.sn) { Text("\($0.model) · \($0.sn)").tag($0.sn) }
+                            }
+                        } else if let sn = draft.alphaSn { LabeledContent("System", value: sn) }
+                    } else {
+                        TextField("AppID", text: $alphaID).textFieldStyle(.roundedBorder)
+                        HStack {
+                            SecureField("AppSecret", text: $alphaSecret).textFieldStyle(.roundedBorder)
+                            Button("Check and save") { Task { await checkAlpha() } }.disabled(alphaID.isEmpty || alphaSecret.isEmpty)
+                        }
+                    }
+                    if let e = alphaError { Problem(e) }
+                }
                 Section("Solar and bill") {
                     numberRow("Solar panels", value: $draft.panelKW, unit: "kW", hint: "e.g. 6.6")
                     numberRow("Daily supply charge", value: $draft.supplyCentsPerDay, unit: "c/day", hint: "on your bill")
@@ -78,8 +108,9 @@ struct SetupSheet: View {
             }
             .padding(20)
         }
-        .frame(width: 560, height: 640)
+        .frame(width: 560, height: 680)
         .onAppear { draft = store.setup }
+        .sheet(isPresented: $showGuide) { GuideSheet() }
     }
 
     private func numberRow(_ label: String, value: Binding<Double?>, unit: String, hint: String) -> some View {
@@ -100,6 +131,17 @@ struct SetupSheet: View {
             draft.siteId = store.setup.siteId
         }
         checking = false
+    }
+
+    private func checkAlpha() async {
+        alphaError = nil
+        let a = AlphaESS(appID: alphaID.trimmingCharacters(in: .whitespaces), appSecret: alphaSecret.trimmingCharacters(in: .whitespaces))
+        do {
+            let systems = try await a.systems()
+            guard a.save() else { alphaError = "The Keychain would not store the key."; return }
+            alphaSystems = systems; alphaSaved = true; alphaSecret = ""
+            if draft.alphaSn == nil || !systems.contains(where: { $0.sn == draft.alphaSn }) { draft.alphaSn = systems[0].sn }
+        } catch { alphaError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription }
     }
 
     private func find() async {

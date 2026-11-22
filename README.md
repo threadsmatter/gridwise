@@ -13,7 +13,7 @@ Gridwise is an independent hobby project. It is not made, endorsed or supported 
 - **Weather and solar outlook:** seven days for your suburb, with rough expected solar if you enter your panel size.
 - **SmartShift** (optional): solar, house, battery and grid power, the battery level, any active override, and buttons to send one.
 - **Charge advice:** a suggestion when charging from the grid now looks worth it ahead of a dear evening. It is advice only and sends nothing.
-- **Your inverter:** a read-only look for inverters on your home network, and whether Amber's own solar curtailment is switched on.
+- **Curtailment** (optional): while Amber charges you to export, Gridwise holds your inverter's output down so the solar goes to the house and battery, then puts the inverter's own limit back. See below.
 
 ## Install
 
@@ -55,6 +55,37 @@ Gridwise only sends overrides. It never turns SmartShift on or off, and it never
 
 This uses the private interface behind Amber's app, which Amber does not publish. Amber could change it or block it at any time. If that happens, the tile shows an error and sends nothing.
 
+## Curtailment
+
+When Amber's feed-in price goes above zero, exporting costs you money. Gridwise can then lower your inverter's power limit just enough for the house and the battery, and put your own limit back when exports pay again.
+
+**Supported inverters**
+
+- **GoodWe** grid-tied inverters (MS, DT, D-NS, XS) with the Wi-Fi or LAN stick on your home network. GW…K-MS models are tested. Other GoodWe models run as a trial: every change is read back, and Gridwise stops if the inverter doesn't keep it.
+- **SunSpec inverters** over Modbus TCP: Fronius, SMA, SolarEdge and others. Modbus TCP control must be switched on in the inverter's own settings (on a Fronius: Communication → Modbus → "Inverter control via Modbus"). These inverters undo the limit by themselves if Gridwise stops renewing it for 10 minutes. SunSpec support has been tested against a simulated inverter but not yet on a real one, so it runs as a trial.
+
+**How much it holds back**
+
+Gridwise reads grid import and export from your battery system's own meter, so it doesn't matter whether Amber has onboarded your solar inverter:
+
+1. **AlphaESS cloud** (also Bytewatt and Neovolt), if you add a free AlphaESS key in Setup. Updated about every 10 seconds.
+2. **SmartShift**, if you're signed in. Updated about once a minute.
+3. **Otherwise, a fixed limit** you choose, such as 30%.
+
+**Safety**
+
+- Off until you set it up, then in **dry run** (shows what it would do, changes nothing) until you choose **Go live**.
+- It never raises the limit above your inverter's own setting.
+- It puts your limit back when exports pay again, when you stop it, when Gridwise quits, and when the Mac goes to sleep. If the Mac loses power, it puts it back the next time Gridwise opens. Gridwise keeps running in the menu bar when you close its window.
+- If someone changes the limit elsewhere (SolarGo, the inverter's own page), Gridwise stops, treats the new value as yours, and goes back to dry run.
+- It stands aside while Amber's own solar curtailment is switched on.
+- Don't run it alongside another program that controls the same inverter.
+- Every action is logged at `~/Library/Application Support/Gridwise/curtailment.log`.
+
+**Getting your inverter's or battery's data from the cloud**
+
+If your system has no network cable to your router, the maker's cloud may be the only way to read it. **Setup → How to get a key for your inverter or battery** explains, maker by maker, how owners get access. Some makers offer free keys (AlphaESS, Fox ESS, Growatt, Enphase, SolarEdge, Tesla), some only on request (Sungrow, Solis, Sigenergy, GoodWe SEMS), and some not to owners at all (Fronius Solar.web, SMA, Huawei). For now Gridwise reads AlphaESS directly.
+
 ## Privacy and security
 
 Gridwise has no server of its own and collects nothing. It talks only to these services:
@@ -67,17 +98,19 @@ Gridwise has no server of its own and collects nothing. It talks only to these s
 | AEMO (`dashboards.public.aemo.com.au`) | your region code | wholesale prices |
 | Open Electricity (`data.openelectricity.org.au`) | your region code | generation mix |
 | Open-Meteo (`api.open-meteo.com`, `geocoding-api.open-meteo.com`) | the suburb you search for, then a position rounded to about 1 km | weather |
+| AlphaESS (`openapi.alphaess.com`), only if you add a key | your AppID, a signature made with your AppSecret, your system's serial number | battery meter readings |
+| Your inverter, on your home network only | power-limit commands, only while curtailment is on | curtailment |
 
 - **Your password** is used once, in memory, to compute a sign-in proof (the SRP method Amazon Cognito uses). It is never stored and never sent anywhere.
-- **Secrets** (the API token and the SmartShift renewal token) are kept in the macOS Keychain and readable only on this Mac, and only while you are logged in.
+- **Secrets** (the API token, the SmartShift renewal token and any AlphaESS key) are kept in the macOS Keychain and readable only on this Mac, and only while you are logged in.
 - **Signing out** of SmartShift revokes the renewal token with Amazon and deletes it from the Keychain.
 - **Override log:** a list of the overrides you send is kept at `~/Library/Application Support/Gridwise/smartshift_overrides.log`. It holds no tokens or account details.
 - **Network scan:** the inverter scan only asks devices on your own network who they are. It never changes a setting. macOS may ask you to allow Gridwise to find devices on your local network.
 
 ## Planned
 
-- **Inverter control:** curtailing solar on inverters Gridwise can find on the network, starting with GoodWe. It will be off by default and need the owner to confirm.
-- **Inverter cloud keys:** step-by-step guides for getting an API key or connection from each inverter maker's cloud (SolarEdge, Enphase, Sungrow, Huawei, GoodWe and others), for systems with no network cable.
+- Reading more makers' clouds directly (Fox ESS and Growatt first), for systems without AlphaESS or SmartShift.
+- Confirming SunSpec curtailment on real Fronius and SMA inverters. Reports from owners are welcome.
 
 ## Building from source
 
